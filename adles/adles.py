@@ -185,9 +185,14 @@ class ADLES():
                          algebraic_vars_idx=[2,3])
                          
             sol = solver.solve(self.windows[i][::-1], y0, yp0)
+            
+            y0 = [sol[2][0,0],sol[2][0,1],sol[2][0,2],sol[2][0,3]]
+            yp0 = [sol[3][0,0],sol[3][0,1],sol[3][0,2],sol[3][0,3]]
 
-            y0 = [sol[2][-1,0],sol[2][-1,1],sol[2][-1,2],sol[2][-1,3]]
-            yp0 = [sol[3][-1,0],sol[3][-1,1],sol[3][-1,2],sol[3][-1,3]]
+            self.lagrange_lambda.insert(0,sol[2][:,0])
+            self.largrange_eta.insert(0,sol[2][:,1])
+            self.lagrange_lambda_dot.insert(0,sol[2][:,2])
+            self.lagrange_eta_dot.insert(0,sol[3][:,3])
 
     def plot_phase_portrait(self):
         plt.plot(self.right_distend[0], self.right_velocity[0], color='b')
