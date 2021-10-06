@@ -2,15 +2,17 @@ import os
 import sys
 
 import librosa
+from librosa.core.audio import resample
 
 def load_single_path(path, resample=None):
     y ,sr = librosa.load(path)
     if resample and isinstance(resample, int):
         y = librosa.resample(y, sr, resample)
-    return y, sr
+    return y, resample
 
 class Dataset():
-    def __init__(self, data_path, data_type):
+    def __init__(self, data_path, data_type, resample=None):
+        self.resample = resample
         self.files = []
         self.labels = []
         if data_type == 'train':
@@ -39,7 +41,7 @@ class Dataset():
         return len(self.files)
 
     def __getitem__(self, idx):
-        return load_single_path(self.files[idx], 8000), self.labels[idx]
+        return load_single_path(self.files[idx], self.resample), self.labels[idx]
 
 def DataLoader(dataset):
     for i in range(len(dataset)):

@@ -182,7 +182,7 @@ class ADLES():
                          max_step_size=1/self.sampling_rate,
                          compute_initcond='yp0',
                          compute_initcond_t0=-len(self.windows[i])*(1/self.sampling_rate),
-                         algebraic_vars_idx=[2,3])
+                         algebraic_vars_idx=[0,1])
                          
             sol = solver.solve(self.windows[i][::-1], y0, yp0)
             
@@ -193,6 +193,51 @@ class ADLES():
             self.largrange_eta.insert(0,sol[2][:,1])
             self.lagrange_lambda_dot.insert(0,sol[2][:,2])
             self.lagrange_eta_dot.insert(0,sol[3][:,3])
+
+    def compute_gradients(self):
+        self.integrate()
+        self.solve()
+
+        f_alpha, f_beta, f_delta = 0.0, 0.0, 0.0
+        for idx, w in enumerate(self.windows):
+            for jdx, t in enumerate(w):
+                f_alpha += -1*(self.right_velocity[idx][jdx] + self.left_velocity[idx][jdx])*(self.lagrange_lambda[idx][jdx] + self.largrange_eta[idx][jdx])
+                f_beta += ((1 + self.right_distend[idx][jdx]**2)*self.right_velocity[idx][jdx]*self.lagrange_lambda[idx][jdx]) + ((1 + self.left_distend[idx][jdx]**2)*self.left_velocity[idx][jdx]*self.largrange_eta[idx][jdx])
+                f_delta += 0.5*(self.right_distend[idx][jdx]*self.largrange_eta[idx][jdx] - self.left_distend[idx][jdx]*self.lagrange_lambda[idx][jdx])
+
+        return f_alpha, f_beta, f_delta
+
+    def train(self, step_size=0.01, n_iters=200, 
+              convergence_thresh=1e-5, patience=10,
+              verbose=False):
+
+        prev_alpha, prev_beta, prev_delta = self.alpha, self.beta, self.delta
+
+        for k in range(n_iters):
+            alpha_patience, beta_pateince, delta_patience = 0, 0, 0
+
+            f_alpha, f_beta, f_delta = self.compute_gradients()
+
+            if alpha_patience < patience:
+                self.alpha += step_size*f_alpha
+            if beta_pateince < patience:
+                self.beta += step_size*f_beta
+            if delta_patience < patience:
+                self.delta += step_size*f_delta
+
+            if abs(self.alpha-prev_alpha) < convergence_thresh and alpha_patience < patience:
+                alpha_patience += 1
+            if abs(self.beta-prev_beta) < convergence_thresh and beta_pateince < patience:
+                beta_pateince += 1
+            if abs(self.alpha-prev_delta) < convergence_thresh and delta_patience < patience:
+                delta_patience += 1
+
+
+            prev_alpha, prev_beta, prev_delta = self.alpha, self.beta, self.delta
+            if verbose:
+                print(f"Iter: {k}    alpha: {self.alpha}, beta: {self.beta}, delta: {self.delta}")
+
+            print("\n\n")
 
     def plot_phase_portrait(self):
         plt.plot(self.right_distend[0], self.right_velocity[0], color='b')
