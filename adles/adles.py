@@ -10,6 +10,7 @@ from adles.filters.gfm_iaif import gfmiaif
 from adles.utilites import binary_search
 
 count = 0
+t_count = 0
 
 class UserData:
     """
@@ -44,6 +45,7 @@ def _coupled_vanderpol(z, t, delta, alpha, beta):
             alpha   : 
     """
     left_disp, left_vel, right_disp, right_vel = z
+    #time = binary_search(5.4, list(range(0,400)))
     acc = [left_vel,
            (delta*left_disp)/2-alpha*(left_vel+right_vel)-left_disp-beta*(1+np.square(left_disp))*left_vel,
            right_vel,
@@ -62,9 +64,20 @@ def _adjoint_lagrangian(t, x, xdot, result, user_data):
             xdot : input first order differential variables 
             result : stores the results
     """
-    time = binary_search(t, user_data.t)
+    global t_count
+    if t in user_data.residual:
+        time = t
+    else:
+        if t<= user_data.t[t_count-1]:
+            t_count-=1
+        if t > (user_data.t[t_count] - user_data.t[max(t_count-1,0)])/2:
+            time = user_data.t[t_count]
+        else:
+            time = user_data.t[t_count-1]
+        #time = binary_search(t, user_data.t)
     residual, c, d, beta, delta, alpha = user_data.residual[time], user_data.c, user_data.d, user_data.beta, user_data.delta, user_data.alpha
     right_disp, left_disp, right_vel, left_vel = user_data.right_disp[time], user_data.left_disp[time], user_data.right_vel[time], user_data.left_vel[time]
+
     result[0] = (alpha * x[1])/(beta*(1+np.square(right_disp))-alpha)
     result[1] = (alpha * x[0])/(beta*(1+np.square(left_disp))-alpha)
     result[2] = -2*c*d*residual -1*(2* beta *right_disp*(right_vel + 1 - delta/2))*x[0] - xdot[2]
@@ -160,6 +173,7 @@ class ADLES():
 
             
     def solve(self):
+        global t_count
         SOLVER = 'ida'
         self.residual = self.compute_residual()
         init_val = -2.0 * self.air_velocity*self.vocal_fold_length*self.residual[-1][-1]
@@ -174,18 +188,20 @@ class ADLES():
                                  self.delta, self.alpha, right_distend, left_distend,
                                  right_velocity, left_velocity, sorted(list(residuals.keys())))
 
-        for i in tqdm(range(len(self.windows)-1,-1,-1), desc="DEA Solver"):
-            solver = dae(SOLVER, _adjoint_lagrangian,
+        solver = dae(SOLVER, _adjoint_lagrangian,
                          user_data=user_data, 
                          old_api = True,
-                         max_steps=5000,
+                         max_steps=50000,
                          max_step_size=1/self.sampling_rate,
                          compute_initcond='yp0',
-                         compute_initcond_t0=-len(self.windows[i])*(1/self.sampling_rate),
+                         compute_initcond_t0=-self.window_size*(1/self.sampling_rate),
                          algebraic_vars_idx=[0,1])
-                         
+
+        loop_count = 0
+        for i in tqdm(range(len(self.windows)-1,-1,-1), desc="DEA Solver"):
+            t_count = len(residuals)-1-loop_count*self.window_size
             sol = solver.solve(self.windows[i][::-1], y0, yp0)
-            
+
             y0 = [sol[2][0,0],sol[2][0,1],sol[2][0,2],sol[2][0,3]]
             yp0 = [sol[3][0,0],sol[3][0,1],sol[3][0,2],sol[3][0,3]]
 
@@ -193,6 +209,8 @@ class ADLES():
             self.largrange_eta.insert(0,sol[2][:,1])
             self.lagrange_lambda_dot.insert(0,sol[2][:,2])
             self.lagrange_eta_dot.insert(0,sol[3][:,3])
+
+            loop_count += 1
 
     def compute_gradients(self):
         self.integrate()
