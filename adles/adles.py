@@ -210,7 +210,7 @@ class ADLES():
 
 
         t_count = len(self.windows)-1
-        for i in tqdm(range(len(self.windows)-1,-1,-1), desc="DAE Sovlver"):
+        for i in range(len(self.windows)-1,-1,-1):
             solver = dae(SOLVER, _adjoint_lagrangian,
                          user_data=user_data, 
                          old_api = True,
@@ -266,23 +266,31 @@ class ADLES():
             f_alpha, f_beta, f_delta = self.compute_gradients()
 
             if alpha_patience < patience:
-                self.alpha += step_size*f_alpha
+                self.alpha -= step_size*f_alpha
             if beta_pateince < patience:
-                self.beta += step_size*f_beta
+                self.beta -= step_size*f_beta
             if delta_patience < patience:
-                self.delta += step_size*f_delta
+                self.delta -= step_size*f_delta
 
-            if abs(self.alpha-prev_alpha) < convergence_thresh and alpha_patience < patience:
+            if abs(self.alpha-prev_alpha) < convergence_thresh:
                 alpha_patience += 1
-            if abs(self.beta-prev_beta) < convergence_thresh and beta_pateince < patience:
+            else:
+                alpha_patience = 0
+
+            if abs(self.beta-prev_beta) < convergence_thresh:
                 beta_pateince += 1
-            if abs(self.alpha-prev_delta) < convergence_thresh and delta_patience < patience:
+            else:
+                beta_pateince = 0
+
+            if abs(self.alpha-prev_delta) < convergence_thresh:
                 delta_patience += 1
+            else: 
+                delta_patience = 0
 
 
             prev_alpha, prev_beta, prev_delta = self.alpha, self.beta, self.delta
 
-            if alpha_patience>patience and beta_pateince>patience and delta_patience>patience:
+            if alpha_patience>patience or beta_pateince>patience or delta_patience>patience:
                 break
 
             if verbose:

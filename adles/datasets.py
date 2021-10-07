@@ -1,5 +1,6 @@
 import os
 import sys
+import random
 
 import librosa
 from librosa.core.audio import resample
@@ -43,6 +44,9 @@ class Dataset():
     def __getitem__(self, idx):
         return load_single_path(self.files[idx], self.resample), self.labels[idx]
 
-def DataLoader(dataset):
-    for i in range(len(dataset)):
+def DataLoader(dataset, shuffle_seed=None):
+    idxs = list(range(len(dataset)))
+    if shuffle_seed:
+        random.Random(shuffle_seed).shuffle(idxs)
+    for i in idxs:
         yield dataset[i]        
