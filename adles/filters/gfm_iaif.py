@@ -6,7 +6,7 @@ from scipy.signal import lfilter, hanning
 from adles.filters.hpfilter_fir import hpfilter_fir
 
 def gfmiaif(frame, fs, p_vt, p_gl, d, hpfilt,
-            hpfilt_in=None):
+            hpfilt_in=np.zeros(1)):
     """
         This function estimates the linear prediction coefficients of both
         vocal tract and glottis filters from a speech signal frame with the
@@ -53,7 +53,7 @@ def gfmiaif(frame, fs, p_vt, p_gl, d, hpfilt,
         # long as the fs does not change, the firls filter does not change.
         # Therefore, the computed filter is returned and can be passed to this
         # function later on to avoid the calculated of the (same) filter. 
-        if hpfilt_in:
+        if hpfilt_in.shape[0] != 1:
             B = hpfilt_in
         else:
             B = hpfilter_fir(Fstop, Fpass, fs, Nfir)   

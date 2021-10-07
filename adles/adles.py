@@ -89,10 +89,10 @@ def _adjoint_lagrangian(t, x, xdot, result, user_data):
     residual, c, d, beta, delta, alpha = user_data.residual[t_time][time], user_data.c, user_data.d, user_data.beta, user_data.delta, user_data.alpha
     right_disp, left_disp, right_vel, left_vel = user_data.right_disp[t_time][time], user_data.left_disp[t_time][time], user_data.right_vel[t_time][time], user_data.left_vel[t_time][time]
 
-    result[0] = (alpha * x[1])/(beta*(1+np.square(right_disp))-alpha)
-    result[1] = (alpha * x[0])/(beta*(1+np.square(left_disp))-alpha)
-    result[2] = -2*c*d*residual -1*(2* beta *right_disp*(right_vel + 1 - delta/2))*x[0] - xdot[2]
-    result[3] = -2*c*d*residual -1*(2* beta *left_disp*(left_vel + 1 - delta/2))*x[1] - xdot[3]
+    result[0] = -2*c*d*residual -1*(2* beta *right_disp*(right_vel + 1 - delta/2))*x[0] - xdot[2]
+    result[1] = -2*c*d*residual -1*(2* beta *left_disp*(left_vel + 1 - delta/2))*x[1] - xdot[3]
+    result[2] = (alpha * x[1])/(beta*(1+np.square(right_disp))-alpha) - x[0]
+    result[3] = (alpha * x[0])/(beta*(1+np.square(left_disp))-alpha) - x[1]
 
     w_count = win_count
 
@@ -133,11 +133,9 @@ class ADLES():
             left += frame_shift
 
     def integrate(self):
-        # TODO : This needs to be converted into a window like format
         y0 = [self.left_distend[0][0], self.left_velocity[0][0], self.right_distend[0][0], self.right_velocity[0][0]]
 
-        print("Running the ODE solver for determining glottal distention and velocity across time")
-        for i in tqdm(range(len(self.windows)), desc="ODE Solver"):
+        for i in range(len(self.windows)):
             sol = odeint(_coupled_vanderpol, y0, self.windows[i], args=(self.delta, self.alpha, self.beta), hmax=1/self.sampling_rate)
 
             self.left_distend[i], self.left_velocity[i] = sol[:, 0], sol[:, 1]
@@ -156,10 +154,10 @@ class ADLES():
 
     def compute_residual(self):
         residuals = []
-        for i in tqdm(range(len(self.windows)), desc="Glottal Residue"):
+        for i in range(len(self.windows)):
             glottal_estimate = self.air_velocity*self.vocal_fold_length*(2*self.half_glottal_width + self.left_distend[i] + self.right_distend[i])
 
-            filter = None if i >= len(self.filters) else self.filters[i]
+            filter = np.zeros(1) if i >= len(self.filters) else self.filters[i]
             inverse_glottal_estimate = gfmiaif(self.signal_window[i], self.sampling_rate, p_vt=48, p_gl=3,
                                                 d=0.99, hpfilt=1, hpfilt_in=filter)
 
@@ -210,18 +208,20 @@ class ADLES():
                                  right_velocity, left_velocity, time_last_ls, corresponding_wins,
                                  self.window_size)
 
-        solver = dae(SOLVER, _adjoint_lagrangian,
+
+        t_count = len(self.windows)-1
+        for i in tqdm(range(len(self.windows)-1,-1,-1), desc="DAE Sovlver"):
+            solver = dae(SOLVER, _adjoint_lagrangian,
                          user_data=user_data, 
                          old_api = True,
-                         max_steps=50000,
+                         rtol=1e-3,
+                         atol=1e-3,
+                         max_steps=5000,
                          max_step_size=1/self.sampling_rate,
                          compute_initcond='yp0',
                          compute_initcond_t0=-self.window_size*(1/self.sampling_rate),
-                         algebraic_vars_idx=[0,1])
+                         algebraic_vars_idx=[2,3])
 
-
-        t_count = len(self.windows)-1
-        for i in tqdm(range(len(self.windows)-1,-1,-1), desc="DAE Solver"):
             w_count = self.window_size-1
             orig_t_count = t_count
             sol = solver.solve(self.windows[i][::-1], y0, yp0)
@@ -229,10 +229,13 @@ class ADLES():
             y0 = [sol[2][0,0],sol[2][0,1],sol[2][0,2],sol[2][0,3]]
             yp0 = [sol[3][0,0],sol[3][0,1],sol[3][0,2],sol[3][0,3]]
 
-            self.lagrange_lambda.insert(0,sol[2][:,0])
-            self.largrange_eta.insert(0,sol[2][:,1])
-            self.lagrange_lambda_dot.insert(0,sol[2][:,2])
-            self.lagrange_eta_dot.insert(0,sol[3][:,3])
+            #print(sol[2][:,2])
+            #print(sol[2][:,1])
+
+            self.lagrange_lambda.insert(0,sol[2][:,2])
+            self.largrange_eta.insert(0,sol[2][:,3])
+            self.lagrange_lambda_dot.insert(0,sol[2][:,0])
+            self.lagrange_eta_dot.insert(0,sol[3][:,1])
 
             t_count = orig_t_count
             t_count -= 1
@@ -244,6 +247,7 @@ class ADLES():
         f_alpha, f_beta, f_delta = 0.0, 0.0, 0.0
         for idx, w in enumerate(self.windows):
             for jdx, t in enumerate(w):
+                #print(f"{idx} {jdx}: ", self.right_velocity[idx][jdx], self.left_velocity[idx][jdx], self.lagrange_lambda[idx][jdx], self.largrange_eta[idx][jdx])
                 f_alpha += -1*(self.right_velocity[idx][jdx] + self.left_velocity[idx][jdx])*(self.lagrange_lambda[idx][jdx] + self.largrange_eta[idx][jdx])
                 f_beta += ((1 + self.right_distend[idx][jdx]**2)*self.right_velocity[idx][jdx]*self.lagrange_lambda[idx][jdx]) + ((1 + self.left_distend[idx][jdx]**2)*self.left_velocity[idx][jdx]*self.largrange_eta[idx][jdx])
                 f_delta += 0.5*(self.right_distend[idx][jdx]*self.largrange_eta[idx][jdx] - self.left_distend[idx][jdx]*self.lagrange_lambda[idx][jdx])
@@ -277,10 +281,12 @@ class ADLES():
 
 
             prev_alpha, prev_beta, prev_delta = self.alpha, self.beta, self.delta
-            if verbose:
-                print(f"Iter: {k}    alpha: {self.alpha}, beta: {self.beta}, delta: {self.delta}")
 
-            print("\n\n")
+            if alpha_patience>patience and beta_pateince>patience and delta_patience>patience:
+                break
+
+            if verbose:
+                print(f"Iter {k}:    alpha: {self.alpha}, beta: {self.beta}, delta: {self.delta}")
 
     def plot_phase_portrait(self):
         plt.plot(self.right_distend[0], self.right_velocity[0], color='b')
