@@ -1,3 +1,4 @@
+from datetime import time
 from warnings import filters
 from tqdm import tqdm
 import numpy as np
@@ -11,6 +12,7 @@ from adles.utilites import binary_search
 
 count = 0
 t_count = 0
+w_count = 0
 
 class UserData:
     """
@@ -18,7 +20,7 @@ class UserData:
     """
     def __init__(self, residual, c, d, beta, delta, alpha,
                  right_disp, left_disp, right_vel, left_vel,
-                 time_window):
+                 last_time, window, window_size):
         self.residual = residual
         self.c = c 
         self.d = d
@@ -29,7 +31,9 @@ class UserData:
         self.left_disp = left_disp
         self.right_vel = right_vel
         self.left_vel = left_vel
-        self.t = time_window
+        self.t = last_time 
+        self.w = window 
+        self.window_size = window_size
 
 
 
@@ -45,7 +49,6 @@ def _coupled_vanderpol(z, t, delta, alpha, beta):
             alpha   : 
     """
     left_disp, left_vel, right_disp, right_vel = z
-    #time = binary_search(5.4, list(range(0,400)))
     acc = [left_vel,
            (delta*left_disp)/2-alpha*(left_vel+right_vel)-left_disp-beta*(1+np.square(left_disp))*left_vel,
            right_vel,
@@ -64,25 +67,34 @@ def _adjoint_lagrangian(t, x, xdot, result, user_data):
             xdot : input first order differential variables 
             result : stores the results
     """
-    global t_count
-    if t in user_data.residual:
+    global t_count, w_count
+    win_count = w_count
+    t_time = user_data.t[t_count]
+    if t in user_data.w:
         time = t
     else:
-        if t<= user_data.t[t_count-1]:
-            t_count-=1
-        if t > (user_data.t[t_count] - user_data.t[max(t_count-1,0)])/2:
-            time = user_data.t[t_count]
+        prev_val = user_data.w[t_time][win_count-1]
+
+        if t <=prev_val:
+            win_count -= max(win_count-1, 0)
+            prev_val = user_data.w[t_time][win_count-1]
+        
+        curr_val = user_data.w[t_time][win_count]
+
+        if t >= (curr_val-prev_val)/2:
+            time = curr_val
         else:
-            time = user_data.t[t_count-1]
-        #time = binary_search(t, user_data.t)
-    residual, c, d, beta, delta, alpha = user_data.residual[time], user_data.c, user_data.d, user_data.beta, user_data.delta, user_data.alpha
-    right_disp, left_disp, right_vel, left_vel = user_data.right_disp[time], user_data.left_disp[time], user_data.right_vel[time], user_data.left_vel[time]
+            time = prev_val
+        
+    residual, c, d, beta, delta, alpha = user_data.residual[t_time][time], user_data.c, user_data.d, user_data.beta, user_data.delta, user_data.alpha
+    right_disp, left_disp, right_vel, left_vel = user_data.right_disp[t_time][time], user_data.left_disp[t_time][time], user_data.right_vel[t_time][time], user_data.left_vel[t_time][time]
 
     result[0] = (alpha * x[1])/(beta*(1+np.square(right_disp))-alpha)
     result[1] = (alpha * x[0])/(beta*(1+np.square(left_disp))-alpha)
     result[2] = -2*c*d*residual -1*(2* beta *right_disp*(right_vel + 1 - delta/2))*x[0] - xdot[2]
     result[3] = -2*c*d*residual -1*(2* beta *left_disp*(left_vel + 1 - delta/2))*x[1] - xdot[3]
 
+    w_count = win_count
 
 
 class ADLES():
@@ -164,8 +176,10 @@ class ADLES():
         for a in args:
             curr_arg = {}
             for idx, w in enumerate(self.windows):
+                curr_win = {}
                 for jdx, t in enumerate(w):
-                    curr_arg[t] = a[idx][jdx]
+                    curr_win[t] = a[idx][jdx]
+                curr_arg[w[-1]] = curr_win
 
             aggr_list.append(curr_arg)
 
@@ -174,19 +188,27 @@ class ADLES():
             
     def solve(self):
         global t_count
+        global w_count
         SOLVER = 'ida'
         self.residual = self.compute_residual()
         init_val = -2.0 * self.air_velocity*self.vocal_fold_length*self.residual[-1][-1]
         y0 = [0.0,0.0,0.0,0.0]
         yp0 = [0.0,0.0,init_val,init_val]
         
-        residuals, left_distend, right_distend, right_velocity, left_velocity = self.aggregate_variables(self.residual, self.left_distend,
+        
+        residuals, left_distend, right_distend, right_velocity, left_velocity, time_wins = self.aggregate_variables(self.residual, self.left_distend,
                                                                                 self.right_distend, self.right_velocity,
-                                                                                self.left_velocity)
+                                                                                self.left_velocity, self.windows)
+
+        time_last_ls = sorted(list(time_wins.keys()))
+        corresponding_wins = {}
+        for t in time_last_ls:
+            corresponding_wins[t] = sorted(list(time_wins[t].keys())) 
 
         user_data = UserData(residuals, self.air_velocity, self.vocal_fold_length, self.beta,
                                  self.delta, self.alpha, right_distend, left_distend,
-                                 right_velocity, left_velocity, sorted(list(residuals.keys())))
+                                 right_velocity, left_velocity, time_last_ls, corresponding_wins,
+                                 self.window_size)
 
         solver = dae(SOLVER, _adjoint_lagrangian,
                          user_data=user_data, 
@@ -197,9 +219,11 @@ class ADLES():
                          compute_initcond_t0=-self.window_size*(1/self.sampling_rate),
                          algebraic_vars_idx=[0,1])
 
-        loop_count = 0
-        for i in tqdm(range(len(self.windows)-1,-1,-1), desc="DEA Solver"):
-            t_count = len(residuals)-1-loop_count*self.window_size
+
+        t_count = len(self.windows)-1
+        for i in tqdm(range(len(self.windows)-1,-1,-1), desc="DAE Solver"):
+            w_count = self.window_size-1
+            orig_t_count = t_count
             sol = solver.solve(self.windows[i][::-1], y0, yp0)
 
             y0 = [sol[2][0,0],sol[2][0,1],sol[2][0,2],sol[2][0,3]]
@@ -210,7 +234,8 @@ class ADLES():
             self.lagrange_lambda_dot.insert(0,sol[2][:,2])
             self.lagrange_eta_dot.insert(0,sol[3][:,3])
 
-            loop_count += 1
+            t_count = orig_t_count
+            t_count -= 1
 
     def compute_gradients(self):
         self.integrate()
